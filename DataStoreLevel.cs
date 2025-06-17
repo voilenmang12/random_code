@@ -8,82 +8,6 @@ public class DataStoreLevel : SerializedScriptableObject
 {
     public StoreLevel level;
     [Button()]
-    void GenerateLevel(int boxCount, int itemType)
-    {
-        level = new StoreLevel(boxCount, itemType);
-    }
-    [Button()]
-    void SolveLevel()
-    {
-        Queue<List<LevelAction>> flowQueue = new Queue<List<LevelAction>>();
-        flowQueue.Enqueue(new List<LevelAction>());
-
-        HashSet<int> checkedLevelHashes = new HashSet<int>();
-        checkedLevelHashes.Add(level.GetHashCode());
-
-        int loopCount = 0;
-        int maxQueueCount = 0;
-        while (flowQueue.Count > 0 && flowQueue.Count < 100000)
-        {
-            loopCount++;
-            List<LevelAction> levelFlow = flowQueue.Dequeue();
-
-            StoreLevel _level = new StoreLevel(level, levelFlow);
-            foreach (var item in _level.dicBox)
-            {
-                StoreBox box = item.Value;
-                if (box.IsEmptyBox())
-                    continue;
-
-                foreach (var item2 in _level.dicBox)
-                {
-                    if (item.Key == item2.Key)
-                        continue;
-                    StoreBox box2 = item2.Value;
-                    if (box2.IsFullBox())
-                        continue;
-
-                    int lastItem = box.GetLastItem();
-                    if (box2.ValidSlot(lastItem))
-                    {
-                        LevelAction newAction = new LevelAction(item.Key, item2.Key);
-                        int nextHashCode = _level.GetNextHashCode(newAction, lastItem);
-                        if (!checkedLevelHashes.Contains(nextHashCode))
-                        {
-                            checkedLevelHashes.Add(nextHashCode);
-
-                            StoreLevel newLevel = new StoreLevel(_level);
-                            newLevel.dicBox[item.Key].TakeItem();
-                            newLevel.dicBox[item2.Key].AddItem(lastItem);
-                            if (newLevel.dicBox[item2.Key].IsComplete())
-                            {
-                                newLevel.dicBox[item2.Key].ClearBox();
-                            }
-
-                            List<LevelAction> newFlow = new List<LevelAction>(levelFlow);
-                            newFlow.Add(newAction);
-                            flowQueue.Enqueue(newFlow);
-
-                            if (newLevel.CompleteLevel())
-                            {
-                                Debug.Log("Level Solved!");
-                                Debug.Log("Loop Count: " + loopCount);
-                                Debug.Log("Max Queue: " + maxQueueCount);
-                                DebugCustom.LogColorJson("Solved Level:", newFlow);
-                                return;
-                            }
-                        }
-                    }
-                }
-            }
-            if (flowQueue.Count > maxQueueCount)
-                maxQueueCount = flowQueue.Count;
-            //Debug.Log($"Loop {loopCount}. Queue Size: {flowQueue.Count}");
-        }
-
-        Debug.Log("Level Unsolved. Loop Count: " + loopCount + ". Queue Count: " + flowQueue.Count);
-    }
-    [Button()]
     public void GenerateLevelReverse(int boxCount, int itemType, int emptyBoxCount, int stepCount)
     {
         int totalBox = boxCount + emptyBoxCount;
@@ -106,15 +30,14 @@ public class DataStoreLevel : SerializedScriptableObject
             }
         }
         level = new StoreLevel();
-        level.dicBox = new Dictionary<int, StoreBox>();
         for (int i = 0; i < totalBox; i++)
         {
-            StoreBox box = new StoreBox();
+            CommonBox box = new CommonBox();
             level.dicBox.Add(i, box);
             lstEmptyBoxId.Add(i);
             lstValidIdCount.Add(i);
         }
-        int count = 1000;
+        int count = 10000;
         visitedHashes.Add(level.GetHashCode());
         while (stepCount > 0 && count > 0)
         {
@@ -124,7 +47,7 @@ public class DataStoreLevel : SerializedScriptableObject
                 boxFromId = lstFullBoxId.GetRandom();
             if (lstEmptyBoxId.Count > 0 && dicItemCount.Count > 0)
                 boxFromId = lstEmptyBoxId.GetRandom();
-            StoreBox boxFrom = level.dicBox[boxFromId];
+            CommonBox boxFrom = level.dicBox[boxFromId] as CommonBox;
             if (boxFrom.IsEmptyBox())
             {
                 if (dicItemCount.Count > 0)
@@ -153,7 +76,7 @@ public class DataStoreLevel : SerializedScriptableObject
                 List<int> lstValidBoxToId = new List<int>();
                 foreach (var item in level.dicBox)
                 {
-                    if (item.Key != boxFromId && item.Value.ValidSlotRevese(lastItem) && !visitedHashes.Contains(level.GetNextHashCode(new LevelAction(boxFromId, item.Key), lastItem)))
+                    if (item.Key != boxFromId && item.Value.ValidSlotReverse(lastItem))
                         lstValidBoxToId.Add(item.Key);
                 }
                 if (lstValidBoxToId.Count == 0)
@@ -162,7 +85,7 @@ public class DataStoreLevel : SerializedScriptableObject
                     return;
                 }
                 int boxToId = lstValidBoxToId.GetRandom();
-                StoreBox boxTo = level.dicBox[boxToId];
+                CommonBox boxTo = level.dicBox[boxToId] as CommonBox;
 
                 boxFrom.TakeItem();
                 boxTo.AddItem(lastItem);
@@ -175,119 +98,48 @@ public class DataStoreLevel : SerializedScriptableObject
         DebugCustom.LogColorJson(dicItemCount);
         DebugCustom.LogColor(stepCount);
     }
+    [Button()]
+    void GenerateLevel(LevelGenerateConfig config)
+    {
+        level = new StoreLevel();
+    }
+}
+public class LevelGenerateConfig
+{
+    public int boxCount;
+    public int boxDepth;
+    public int emptyBoxCount;
+    public int itemTypeCount;
+
+    public int extraStepCount;
 }
 public class StoreLevel
 {
-    public Dictionary<int, StoreBox> dicBox;
+    public Dictionary<int, IStoreBox> dicBox;
     public StoreLevel()
     {
-
+        dicBox = new Dictionary<int, IStoreBox>();
     }
     public StoreLevel(StoreLevel level)
     {
-        dicBox = new Dictionary<int, StoreBox>();
+        dicBox = new Dictionary<int, IStoreBox>();
         foreach (var item in level.dicBox)
         {
-            StoreBox box = new StoreBox();
-            box.lstItems = new List<int>(item.Value.lstItems);
-            dicBox.Add(item.Key, box);
+            dicBox.Add(item.Key, item.Value.GetClone());
         }
-    }
-    public StoreLevel(int boxCount, int itemType)
-    {
-        if (itemType <= 0 || boxCount <= itemType)
-        {
-            Debug.LogError("itemType must > 0 and boxCount must >= itemType");
-            return;
-        }
-        dicBox = new Dictionary<int, StoreBox>();
-        List<StoreBox> lstValidBox = new List<StoreBox>();
-        List<StoreBox> lstEmptyBox = new List<StoreBox>();
-
-        int totalItemCount = boxCount * 3;
-        boxCount += 2;
-        for (int i = 0; i < boxCount; i++)
-        {
-            StoreBox box = new StoreBox();
-            dicBox.Add(i, box);
-            lstValidBox.Add(box);
-            lstEmptyBox.Add(box);
-        }
-        lstValidBox.Shuffle();
-        Dictionary<int, int> dicItemCount = new Dictionary<int, int>();
-        while (totalItemCount > 0)
-        {
-            for (int i = 1; i <= itemType; i++)
-            {
-                if (!dicItemCount.ContainsKey(i))
-                    dicItemCount.Add(i, 0);
-                dicItemCount[i] += 3;
-                totalItemCount -= 3;
-                if (totalItemCount == 0)
-                    break;
-            }
-        }
-        DebugCustom.LogColorJson("DicItem:", dicItemCount);
-        List<int> lstItems = new List<int>();
-        foreach (var item in dicItemCount)
-        {
-            for (int i = 0; i < item.Value; i++)
-            {
-                lstItems.Add(item.Key);
-            }
-        }
-        lstItems.Shuffle();
-        Debug.Log(lstItems.Count);
-        while (lstEmptyBox.Count > 0)
-        {
-            StoreBox box = lstEmptyBox.GetRandom();
-            lstEmptyBox.Remove(box);
-            int item = lstItems.GetRandom();
-            lstItems.Remove(item);
-            box.AddItem(item);
-        }
-        while (lstItems.Count > 0 && lstValidBox.Count > 0)
-        {
-            int item = lstItems.GetRandom();
-            lstItems.Remove(item);
-            StoreBox box = lstValidBox.GetRandom();
-            box.AddItem(item);
-            if (box.IsComplete())
-            {
-                box.TakeItem();
-            }
-            else
-            {
-                if (box.IsFullBox())
-                    lstValidBox.Remove(box);
-            }
-        }
-        if (lstItems.Count > 0)
-            Debug.LogError("There are still items left after filling boxes! Items left: " + lstItems.Count);
     }
     public StoreLevel(StoreLevel levelBase, List<LevelAction> lstAction)
     {
-        dicBox = new Dictionary<int, StoreBox>();
+        dicBox = new Dictionary<int, IStoreBox>();
         foreach (var item in levelBase.dicBox)
         {
-            StoreBox box = new StoreBox(item.Value);
-            dicBox.Add(item.Key, box);
+            dicBox.Add(item.Key, item.Value.GetClone());
         }
         foreach (var action in lstAction)
         {
             if (dicBox.ContainsKey(action.boxIdFrom) && dicBox.ContainsKey(action.boxIdTo))
             {
-                StoreBox boxFrom = dicBox[action.boxIdFrom];
-                StoreBox boxTo = dicBox[action.boxIdTo];
-                if (!boxFrom.IsEmptyBox() && !boxTo.IsFullBox())
-                {
-                    int item = boxFrom.TakeItem();
-                    boxTo.AddItem(item);
-                    if (boxTo.IsComplete())
-                    {
-                        boxTo.ClearBox();
-                    }
-                }
+                dicBox[action.boxIdTo].ApplyAction(dicBox[action.boxIdFrom]);
             }
         }
     }
@@ -310,13 +162,10 @@ public class StoreLevel
             {
                 if (!otherLevel.dicBox.ContainsKey(item.Key))
                     return false;
-                StoreBox box = item.Value;
-                StoreBox ortherBox = otherLevel.dicBox[item.Key];
-                for (int i = 0; i < box.lstItems.Count; i++)
-                {
-                    if (box.lstItems[i] != ortherBox.lstItems[i])
-                        return false;
-                }
+                IStoreBox box = item.Value;
+                IStoreBox ortherBox = otherLevel.dicBox[item.Key];
+                if (!box.Equals(ortherBox))
+                    return false;
             }
             return true;
         }
@@ -340,42 +189,30 @@ public class StoreLevel
             return hash;
         }
     }
-    public int GetNextHashCode(LevelAction action, int _item)
-    {
-        unchecked
-        {
-            int hash = 17;
-            List<int> lstHash = new List<int>();
-            foreach (var item in dicBox)
-            {
-                if (item.Key == action.boxIdFrom)
-                {
-                    StoreBox box = new StoreBox(item.Value);
-                    box.TakeItem();
-                    lstHash.Add(box.GetHashCode());
-                }
-                else if (item.Key == action.boxIdTo)
-                {
-                    StoreBox box = new StoreBox(item.Value);
-                    box.AddItem(_item);
-                    lstHash.Add(box.GetHashCode());
-                }
-                else
-                    lstHash.Add(item.Value.GetHashCode());
-            }
-            lstHash.Sort();
-            foreach (var item in lstHash)
-            {
-                hash = hash * 31 + item;
-            }
-            return hash;
-        }
-    }
 }
-public class StoreBox
+public interface IStoreBox
+{
+    public IStoreBox GetClone();
+    public bool Equals(object obj);
+    public int GetHashCode();
+    public bool IsEmptyBox();
+    public bool IsFullBox();
+    public bool ValidSlot(int item);
+    public bool ValidSlotReverse(int item);
+    public int GetLastItem();
+    public int TakeItem();
+    public void AddItem(int item);
+    public bool ValidAction(IStoreBox boxFrom);
+    public bool ValidActionReverse(IStoreBox boxFrom);
+    public void ApplyAction(IStoreBox boxFrom);
+    public bool IsComplete();
+    public void ClearBox();
+}
+public class CommonBox : IStoreBox
 {
     public List<int> lstItems;
-    public StoreBox()
+    public bool locked = false;
+    public CommonBox()
     {
         lstItems = new List<int>();
         for (int i = 0; i < 3; i++)
@@ -383,9 +220,13 @@ public class StoreBox
             lstItems.Add(0);
         }
     }
-    public StoreBox(StoreBox storeBox)
+    public CommonBox(CommonBox storeBox)
     {
         lstItems = new List<int>(storeBox.lstItems);
+    }
+    public IStoreBox GetClone()
+    {
+        return new CommonBox(this);
     }
     public override int GetHashCode()
     {
@@ -411,7 +252,11 @@ public class StoreBox
     {
         return IsEmptyBox() || GetLastItem() == item;
     }
-    public bool ValidSlotRevese(int item)
+    public bool IsFullBox()
+    {
+        return lstItems[2] != 0;
+    }
+    public bool ValidSlotReverse(int item)
     {
         bool dup = false;
         if (lstItems[0] == item && lstItems[1] == item)
@@ -455,10 +300,6 @@ public class StoreBox
     {
         return lstItems[0] != 0 && lstItems[0] == lstItems[1] && lstItems[0] == lstItems[2];
     }
-    public bool IsFullBox()
-    {
-        return lstItems[2] != 0;
-    }
     public void ClearBox()
     {
         lstItems.Clear();
@@ -466,6 +307,61 @@ public class StoreBox
         {
             lstItems.Add(0);
         }
+    }
+    public bool ValidAction(IStoreBox boxFrom)
+    {
+        if (boxFrom is CommonBox)
+        {
+            if (IsFullBox())
+                return false;
+            CommonBox commonBoxFrom = boxFrom as CommonBox;
+            if (commonBoxFrom.IsEmptyBox())
+                return false;
+            return GetLastItem() == commonBoxFrom.GetLastItem();
+        }
+        return false;
+    }
+    public bool ValidActionReverse(IStoreBox boxFrom)
+    {
+        if (boxFrom is CommonBox)
+        {
+            CommonBox commonBoxFrom = boxFrom as CommonBox;
+            if (IsFullBox())
+                return false;
+            if (commonBoxFrom.IsEmptyBox())
+                return false;
+            int lastItem = commonBoxFrom.GetLastItem();
+            if (lstItems[0] == lastItem && lstItems[1] == lastItem)
+                return false;
+            return true;
+        }
+
+        return false;
+    }
+    public void ApplyAction(IStoreBox boxFrom)
+    {
+        if (boxFrom is CommonBox)
+        {
+            CommonBox commonBox = boxFrom as CommonBox;
+            int item = commonBox.TakeItem();
+            AddItem(item);
+            if (IsComplete())
+                ClearBox();
+        }
+    }
+    public override bool Equals(object obj)
+    {
+        if (obj is CommonBox)
+        {
+            CommonBox commonBox = obj as CommonBox;
+            for (int i = 0; i < lstItems.Count; i++)
+            {
+                if (commonBox.lstItems[i] != lstItems[i])
+                    return false;
+            }
+            return true;
+        }
+        return false;
     }
 }
 public class LevelAction
