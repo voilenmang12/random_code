@@ -7,124 +7,45 @@ using System.Linq;
 public class DataStoreLevel : SerializedScriptableObject
 {
     public StoreLevel level;
+    public LevelGenerateConfig levelConfig;
     [Button()]
-    public void GenerateLevelReverse(int boxCount, int itemType, int emptyBoxCount, int stepCount)
+    void GenerateLevel()
     {
-        int totalBox = boxCount + emptyBoxCount;
-        int totalItemCount = boxCount * 3;
-        Dictionary<int, int> dicItemCount = new Dictionary<int, int>();
-        List<int> lstFullBoxId = new List<int>();
-        List<int> lstEmptyBoxId = new List<int>();
-        List<int> lstValidIdCount = new List<int>();
-        HashSet<int> visitedHashes = new HashSet<int>();
-        while (totalItemCount > 0)
-        {
-            for (int i = 1; i <= itemType; i++)
-            {
-                if (!dicItemCount.ContainsKey(i))
-                    dicItemCount.Add(i, 0);
-                dicItemCount[i] += 3;
-                totalItemCount -= 3;
-                if (totalItemCount == 0)
-                    break;
-            }
-        }
-        level = new StoreLevel();
-        for (int i = 0; i < totalBox; i++)
-        {
-            CommonBox box = new CommonBox();
-            level.dicBox.Add(i, box);
-            lstEmptyBoxId.Add(i);
-            lstValidIdCount.Add(i);
-        }
-        int count = 10000;
-        visitedHashes.Add(level.GetHashCode());
-        while (stepCount > 0 && count > 0)
-        {
-            count--;
-            int boxFromId = lstValidIdCount.GetRandom();
-            if (lstFullBoxId.Count > 0)
-                boxFromId = lstFullBoxId.GetRandom();
-            if (lstEmptyBoxId.Count > 0 && dicItemCount.Count > 0)
-                boxFromId = lstEmptyBoxId.GetRandom();
-            CommonBox boxFrom = level.dicBox[boxFromId] as CommonBox;
-            if (boxFrom.IsEmptyBox())
-            {
-                if (dicItemCount.Count > 0)
-                {
-                    int item = dicItemCount.Keys.ToList().GetRandom();
-                    for (int i = 0; i < 3; i++)
-                    {
-                        boxFrom.lstItems[i] = item;
-                    }
-                    dicItemCount[item] -= 3;
-                    if (dicItemCount[item] <= 0)
-                    {
-                        dicItemCount.Remove(item);
-                    }
-                    lstFullBoxId.Add(boxFromId);
-                    lstEmptyBoxId.Remove(boxFromId);
-                    lstValidIdCount.Remove(boxFromId);
-                    visitedHashes.Add(level.GetHashCode());
-                }
-                else
-                    continue;
-            }
-            else
-            {
-                int lastItem = boxFrom.GetLastItem();
-                List<int> lstValidBoxToId = new List<int>();
-                foreach (var item in level.dicBox)
-                {
-                    if (item.Key != boxFromId && item.Value.ValidSlotReverse(lastItem))
-                        lstValidBoxToId.Add(item.Key);
-                }
-                if (lstValidBoxToId.Count == 0)
-                {
-                    Debug.LogError("No valid box to move item to!");
-                    return;
-                }
-                int boxToId = lstValidBoxToId.GetRandom();
-                CommonBox boxTo = level.dicBox[boxToId] as CommonBox;
-
-                boxFrom.TakeItem();
-                boxTo.AddItem(lastItem);
-                if (lstFullBoxId.Contains(boxFromId))
-                    lstFullBoxId.Remove(boxFromId);
-                lstValidIdCount.Add(boxFromId);
-            }
-            stepCount--;
-        }
-        DebugCustom.LogColorJson(dicItemCount);
-        DebugCustom.LogColor(stepCount);
-    }
-    [Button()]
-    void GenerateLevel(LevelGenerateConfig config)
-    {
-        if (config.boxCount <= 3)
+        CommonBoxConfig commonBoxConfig = levelConfig.commonBoxConfig;
+        LockedBoxConfig lockedBoxConfig = levelConfig.lockedBoxConfig;
+        PendingBoxConfig pendingBoxConfig = levelConfig.pendingBoxConfig;
+        SinglestackBoxConfig singlestackBoxConfig = levelConfig.singlestackBoxConfig;
+        if (commonBoxConfig.boxCount <= 3)
         {
             Debug.LogError("Box count must be greater than 3 to generate a valid level.");
             return;
         }
-        if (config.itemTypeCount < 0 || config.itemTypeCount > config.boxCount)
+        if (levelConfig.itemTypeCount < 0 || levelConfig.itemTypeCount > commonBoxConfig.boxCount)
         {
             Debug.LogError("Item type count must be between 0 and box count.");
             return;
         }
         level = new StoreLevel();
         List<int> lstItemType = new List<int>();
-        for (int i = 1; i <= config.itemTypeCount; i++)
+        for (int i = 1; i <= levelConfig.itemTypeCount; i++)
         {
             lstItemType.Add(i);
         }
-        for (int i = 0; i < config.boxCount; i++)
+        for (int i = 0; i < commonBoxConfig.boxCount; i++)
         {
-            CommonBoxStack boxStack = new CommonBoxStack(config.boxDepth);
+            CommonBoxStack boxStack = new CommonBoxStack(commonBoxConfig.boxDepth, 0);
             level.dicBox.Add(i, boxStack);
+        }
+        for (int i = 0; i < singlestackBoxConfig.boxCount; i++)
+        {
+            SingleStackBox singleStack = new SingleStackBox(singlestackBoxConfig.boxDepth, singlestackBoxConfig.locked);
+            level.dicBox.Add(commonBoxConfig.boxCount + i, singleStack);
         }
         HashSet<int> visitedHashes = new HashSet<int>();
         visitedHashes.Add(level.GetHashCode());
-        while (config.stepCount > 0)
+        List<LevelAction> lstLevelActions = new List<LevelAction>();
+        int stepCount = 0;
+        while (stepCount < levelConfig.stepCount)
         {
             List<int> lstValidBoxFromId = new List<int>();
             foreach (var iBox in level.dicBox)
@@ -137,17 +58,17 @@ public class DataStoreLevel : SerializedScriptableObject
             if (lstValidBoxFromId.Count == 0)
             {
                 Debug.LogError("No valid box to take item from!");
-                return;
+                break;
             }
             int boxFromId = lstValidBoxFromId.GetRandom();
-            CommonBoxStack boxFrom = level.dicBox[boxFromId] as CommonBoxStack;
+            IStoreBox boxFrom = level.dicBox[boxFromId];
             if (boxFrom.IsEmptyBox())
             {
                 int newItem = lstItemType.GetRandom();
                 lstItemType.Remove(newItem);
                 if (lstItemType.Count == 0)
                 {
-                    for (int i = 1; i <= config.itemTypeCount; i++)
+                    for (int i = 1; i <= levelConfig.itemTypeCount; i++)
                     {
                         lstItemType.Add(i);
                     }
@@ -157,10 +78,23 @@ public class DataStoreLevel : SerializedScriptableObject
                     boxFrom.AddItem(newItem);
                 }
             }
-            if (boxFrom.IsMixedItem() && boxFrom.lstBoxes.Count < config.boxDepth)
+            if (boxFrom is CommonBoxStack)
             {
-                boxFrom.AddBox(new CommonBox());
-                continue;
+                CommonBoxStack boxStack = boxFrom as CommonBoxStack;
+                if (boxStack.IsMixedItem())
+                {
+                    if (boxStack.lstBoxes.Count < commonBoxConfig.boxDepth)
+                    {
+                        boxStack.AddBox(new CommonBox());
+                        continue;
+                    }
+                    else if (level.pendingBoxs.Count < pendingBoxConfig.boxCount)
+                    {
+                        level.pendingBoxs.Enqueue(new PendingBox(boxStack.GetLastBox().lstItems));
+                        boxStack.GetLastBox().ClearBox();
+                        continue;
+                    }
+                }
             }
             int item = boxFrom.GetLastItem();
 
@@ -175,39 +109,101 @@ public class DataStoreLevel : SerializedScriptableObject
             if (lstValidBoxToId.Count == 0)
             {
                 Debug.LogError("No valid box to add item to!");
-                return;
+                break;
             }
 
             int boxToId = lstValidBoxToId.GetRandom();
             List<int> lstValidEmptyBoxToId = lstValidBoxFromId.Where(id => level.dicBox[id].IsEmptyBox()).ToList();
             if (lstValidEmptyBoxToId.Count > 0)
                 boxToId = lstValidEmptyBoxToId.GetRandom();
-            CommonBoxStack boxTo = level.dicBox[boxToId] as CommonBoxStack;
+            IStoreBox boxTo = level.dicBox[boxToId];
 
             boxFrom.TakeItem();
-            if (boxTo.IsFullBox())
+            if (boxTo.IsFullBox() && boxTo is CommonBoxStack)
             {
-                boxTo.AddBox(new CommonBox());
+                ((CommonBoxStack)boxTo).AddBox(new CommonBox());
             }
             boxTo.AddItem(item);
-            config.stepCount--;
+            int hash = level.GetHashCode();
+            if (visitedHashes.Contains(hash))
+                Debug.LogWarning($"Duplicate level state detected, retrying step generation. Step: {stepCount}");
+            else{
+                visitedHashes.Add(level.GetHashCode());
+                LevelAction action = new LevelAction(boxFromId, boxToId);
+                lstLevelActions.Add(action);
+            }
+            stepCount++;
         }
+        int reversedId = 0;
+        List<int> lstValidId = new List<int>();
+        foreach (var iBox in level.dicBox)
+        {
+            if (iBox.Value is CommonBoxStack)
+            {
+                lstValidId.Add(iBox.Key);
+            }
+        }
+        int lockBoxCount = 0;
+        for (int i = 0; i < lockedBoxConfig.boxCount; i++)
+        {
+            for (int j = 0; j < lockedBoxConfig.lockCount; j++)
+            {
+                reversedId++;
+                LevelAction action = lstLevelActions[lstLevelActions.Count - reversedId];
+                if (lstValidId.Contains(action.boxIdFrom))
+                    lstValidId.Remove(action.boxIdFrom);
+                if (lstValidId.Contains(action.boxIdTo))
+                    lstValidId.Remove(action.boxIdTo);
+            }
+            if (lstValidId.Count > 0)
+            {
+                int lockId = lstValidId.GetRandom();
+                ((CommonBoxStack)level.dicBox[lockId]).locked = lockedBoxConfig.lockCount;
+                lstValidId.Remove(lockId);
+                lockBoxCount++;
+            }
+        }
+        Debug.Log($"Level generated with {level.dicBox.Count} boxes, {lockBoxCount} Locked Box and {level.pendingBoxs.Count} pending boxes.");
+        Debug.Log($"Valid step: {visitedHashes.Count}, Total step: {stepCount}");
     }
 }
 public class LevelGenerateConfig
 {
+    public CommonBoxConfig commonBoxConfig;
+    public LockedBoxConfig lockedBoxConfig;
+    public PendingBoxConfig pendingBoxConfig;
+    public SinglestackBoxConfig singlestackBoxConfig;
+    public int itemTypeCount;
+    public int stepCount;
+}
+public class CommonBoxConfig
+{
     public int boxCount;
     public int boxDepth;
-    public int itemTypeCount;
-
-    public int stepCount;
+}
+public class LockedBoxConfig
+{
+    public int boxCount;
+    public int lockCount;
+}
+public class PendingBoxConfig
+{
+    public int boxCount;
+}
+public class SinglestackBoxConfig
+{
+    public int boxCount;
+    public int boxDepth;
+    public bool locked = false;
 }
 public class StoreLevel
 {
     public Dictionary<int, IStoreBox> dicBox;
+    public Queue<PendingBox> pendingBoxs;
     public StoreLevel()
     {
         dicBox = new Dictionary<int, IStoreBox>();
+        pendingBoxs = new Queue<PendingBox>();
     }
     public StoreLevel(StoreLevel level)
     {
@@ -216,6 +212,7 @@ public class StoreLevel
         {
             dicBox.Add(item.Key, item.Value.GetClone());
         }
+        pendingBoxs = new Queue<PendingBox>(level.pendingBoxs.Select(box => new PendingBox(box)));
     }
     public StoreLevel(StoreLevel levelBase, List<LevelAction> lstAction)
     {
@@ -228,7 +225,16 @@ public class StoreLevel
         {
             if (dicBox.ContainsKey(action.boxIdFrom) && dicBox.ContainsKey(action.boxIdTo))
             {
-                dicBox[action.boxIdTo].ApplyAction(dicBox[action.boxIdFrom]);
+                bool completeBox = dicBox[action.boxIdTo].ApplyAction(dicBox[action.boxIdFrom]);
+                if (completeBox && pendingBoxs.Count > 0)
+                {
+                    PendingBox box = pendingBoxs.Dequeue();
+                    foreach (var item in box.lstItems)
+                    {
+                        if (item != 0)
+                            dicBox[action.boxIdTo].AddItem(item);
+                    }
+                }
             }
         }
     }
@@ -297,14 +303,13 @@ public interface IStoreBox
     public bool CanTakeItemReverse();
     public bool CanAddItem(IStoreBox boxFrom);
     public bool CanAddItemReverse(IStoreBox boxFrom);
-    public void ApplyAction(IStoreBox boxFrom);
+    public bool ApplyAction(IStoreBox boxFrom);
     public bool IsComplete();
     public void ClearBox();
 }
 public class CommonBox : IStoreBox
 {
     public List<int> lstItems;
-    public bool locked = false;
     public CommonBox()
     {
         lstItems = new List<int>();
@@ -325,10 +330,10 @@ public class CommonBox : IStoreBox
     {
         unchecked
         {
-            int hash = 17;
+            int hash = 1;
             for (int i = 0; i < lstItems.Count; i++)
             {
-                hash = hash * 31 + lstItems[i];
+                hash = hash * 30 + lstItems[i];
             }
             return hash;
         }
@@ -441,12 +446,16 @@ public class CommonBox : IStoreBox
             return false;
         return true;
     }
-    public void ApplyAction(IStoreBox boxFrom)
+    public bool ApplyAction(IStoreBox boxFrom)
     {
         int item = boxFrom.TakeItem();
         AddItem(item);
         if (IsComplete())
+        {
             ClearBox();
+            return true;
+        }
+        return false;
     }
     public override bool Equals(object obj)
     {
@@ -467,11 +476,13 @@ public class CommonBoxStack : IStoreBox
 {
     public List<CommonBox> lstBoxes;
     public int boxDepth;
-    public CommonBoxStack(int boxDepth)
+    public int locked = 0;
+    public CommonBoxStack(int boxDepth, int locked)
     {
         lstBoxes = new List<CommonBox>();
         this.boxDepth = boxDepth;
         lstBoxes.Add(new CommonBox());
+        this.locked = locked;
     }
     public CommonBoxStack()
     {
@@ -483,6 +494,7 @@ public class CommonBoxStack : IStoreBox
         CommonBoxStack clone = new CommonBoxStack();
         clone.lstBoxes = new List<CommonBox>(lstBoxes.Select(box => box.GetClone() as CommonBox));
         clone.boxDepth = boxDepth;
+        clone.locked = locked;
         return clone;
     }
     public override bool Equals(object obj)
@@ -504,7 +516,7 @@ public class CommonBoxStack : IStoreBox
     {
         unchecked
         {
-            int hash = 17;
+            int hash = 2 + locked;
             foreach (var box in lstBoxes)
             {
                 hash = hash * 31 + box.GetHashCode();
@@ -568,13 +580,18 @@ public class CommonBoxStack : IStoreBox
     {
         return lstBoxes.Count < boxDepth || GetLastBox().CanAddItemReverse(boxFrom);
     }
-    public void ApplyAction(IStoreBox boxFrom)
+    public bool ApplyAction(IStoreBox boxFrom)
     {
         GetLastBox().ApplyAction(boxFrom);
         if (GetLastBox().IsComplete() && lstBoxes.Count > 1)
         {
             lstBoxes.RemoveAt(0);
         }
+        if (lstBoxes.Count == 0 && GetLastBox().IsEmptyBox())
+        {
+            return true;
+        }
+        return false;
     }
     public bool IsComplete()
     {
@@ -588,6 +605,199 @@ public class CommonBoxStack : IStoreBox
     public void AddBox(CommonBox box)
     {
         lstBoxes.Insert(0, box);
+    }
+}
+public class PendingBox
+{
+    public List<int> lstItems;
+    public PendingBox()
+    {
+        lstItems = new List<int>();
+        for (int i = 0; i < 3; i++)
+        {
+            lstItems.Add(0);
+        }
+    }
+    public PendingBox(List<int> items)
+    {
+        lstItems = new List<int>(items);
+    }
+    public PendingBox(PendingBox storeBox)
+    {
+        lstItems = new List<int>(storeBox.lstItems);
+    }
+    public void AddItem(int item)
+    {
+        for (int i = 0; i < 3; i++)
+        {
+            if (lstItems[i] == 0)
+            {
+                lstItems[i] = item;
+                break;
+            }
+        }
+    }
+    public override bool Equals(object obj)
+    {
+        if (obj is PendingBox otherBox)
+        {
+            if (lstItems.Count != otherBox.lstItems.Count)
+                return false;
+            for (int i = 0; i < lstItems.Count; i++)
+            {
+                if (lstItems[i] != otherBox.lstItems[i])
+                    return false;
+            }
+            return true;
+        }
+        return false;
+    }
+    public override int GetHashCode()
+    {
+        unchecked
+        {
+            int hash = 3;
+            for (int i = 0; i < lstItems.Count; i++)
+            {
+                hash = hash * 32 + lstItems[i];
+            }
+            return hash;
+        }
+    }
+}
+public class SingleStackBox : IStoreBox
+{
+    public Stack<int> stackItems;
+    public int boxDepth = 3;
+    public bool locked = false;
+    public SingleStackBox()
+    {
+        stackItems = new Stack<int>();
+    }
+    public SingleStackBox(int boxDepth, bool locked)
+    {
+        stackItems = new Stack<int>();
+        this.boxDepth = boxDepth;
+        this.locked = locked;
+    }
+    public SingleStackBox(SingleStackBox storeBox)
+    {
+        stackItems = new Stack<int>(storeBox.stackItems.Reverse()); // Reverse to maintain order
+        boxDepth = storeBox.boxDepth;
+        locked = storeBox.locked;
+
+    }
+
+    public IStoreBox GetClone()
+    {
+        return new SingleStackBox(this);
+    }
+
+    public override bool Equals(object obj)
+    {
+        if (obj is SingleStackBox otherBox)
+        {
+            if (stackItems.Count != otherBox.stackItems.Count)
+                return false;
+            return stackItems.SequenceEqual(otherBox.stackItems);
+        }
+        return false;
+    }
+    public override int GetHashCode()
+    {
+        unchecked
+        {
+            int hash = locked ? 4 : 5;
+            foreach (var item in stackItems)
+            {
+                hash = hash * (locked ? 33 : 34) + item.GetHashCode();
+            }
+            return hash;
+        }
+    }
+    public void AddItem(int item)
+    {
+        stackItems.Push(item);
+    }
+
+    public bool ApplyAction(IStoreBox boxFrom)
+    {
+        AddItem(boxFrom.TakeItem());
+        return false;
+    }
+
+    public bool CanAddItem(IStoreBox boxFrom)
+    {
+        return !locked && stackItems.Count == 0;
+    }
+
+    public bool CanAddItemReverse(IStoreBox boxFrom)
+    {
+        return stackItems.Count < boxDepth;
+    }
+
+    public bool CanTakeItem()
+    {
+        return stackItems.Count > 0;
+    }
+
+    public bool CanTakeItemReverse()
+    {
+        return !locked && stackItems.Count == 0;
+    }
+
+    public void ClearBox()
+    {
+        stackItems.Clear();
+    }
+
+    public int GetItemCount()
+    {
+        return stackItems.Count;
+    }
+
+    public int GetLastItem()
+    {
+        return stackItems.Count > 0 ? stackItems.Peek() : 0;
+    }
+
+    public bool IsComplete()
+    {
+        return stackItems.Count == 0;
+    }
+
+    public bool IsEmptyBox()
+    {
+        return stackItems.Count == 0;
+    }
+
+    public bool IsFullBox()
+    {
+        return stackItems.Count >= boxDepth;
+    }
+
+    public bool IsMixedItem()
+    {
+        return stackItems.Count > 1 && stackItems.Distinct().Count() > 1;
+    }
+
+    public int TakeItem()
+    {
+        if (stackItems.Count > 0)
+        {
+            return stackItems.Pop();
+        }
+        return -1; // or throw an exception
+    }
+
+    public bool ValidSlot(int item)
+    {
+        return !locked && stackItems.Count == 0;
+    }
+
+    public bool ValidSlotReverse(int item)
+    {
+        return stackItems.Count < boxDepth;
     }
 }
 public class LevelAction
